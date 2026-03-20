@@ -9,7 +9,7 @@ def parse_questions_to_set(q_str):
     numbers = re.findall(r'\d+', str(q_str))
     return set(numbers)
 
-st.title("多试卷错题精准定位系统 (V2 高级版)")
+st.title("多试卷错题精准定位系统 (V3 高级版)")
 st.write("上传多份试卷，设定错题后，可灵活选择命中几份试卷才输出该学生。")
 
 # 1. 动态文件上传区
@@ -82,20 +82,4 @@ if uploaded_files:
                     student_wrong_qs = papers_data[paper_name].get(student, set())
                     
                     # 如果目标错题是该生该卷错题的子集，命中次数 + 1
-                    if target_qs.issubset(student_wrong_qs):
-                        match_count += 1
-                
-                # 严密判定：只要命中次数 >= 用户设定的阈值，即抓取该学生
-                if match_count >= selected_threshold:
-                    # 附带命中次数信息，让老师看结果时更清晰
-                    hit_students.append(f"{student} (命中{match_count}卷)")
-            
-            # 4. 结果输出
-            st.divider()
-            if hit_students:
-                st.success(f"匹配成功！共找到 {len(hit_students)} 位符合条件的学生：")
-                st.write("、".join(hit_students))
-            else:
-                st.info("没有找到符合设定标准的大意学生。")
-    else:
-        st.info("👆 请先在上方至少为一份试卷输入错题号。")
+                    if target_qs.issubset(student_wrong
