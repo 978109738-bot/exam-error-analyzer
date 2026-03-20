@@ -82,4 +82,4 @@ if uploaded_files:
                     student_wrong_qs = papers_data[paper_name].get(student, set())
                     
                     # 如果目标错题是该生该卷错题的子集，命中次数 + 1
-                    if target_qs.issubset(student_wrong
+                    if target_qs.issubset(student_wrong_qs):
