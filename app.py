@@ -51,7 +51,7 @@ def parse_names_to_set(name_str):
 # ==========================================
 
 st.set_page_config(page_title="错题匹配系统 V6", layout="wide")
-st.title("多试卷错题精准定位系统 (V6 智能表头版)")
+st.title("试卷错题精准定位系统 )")
 st.write("已深度优化：智能识别含有合并单元格 giant 标题行的复杂排版，支持自定义数据起始行。")
 
 # 1. 动态文件上传区
@@ -103,7 +103,7 @@ if uploaded_files:
                 layout_type = st.radio(
                     "3. 请选择该表格的排版类型：",
                     options=["类型1：以【学生】为行 (常规)", 
-                             "类型2：以【题号】为行 (复杂排版，攻克合并单元格)"],
+                             "类型2：以【题号】为行 (复杂排版)"],
                     help="类型1：姓名列和错题号列是分开的。类型2：题号列是合并的，名单列是长字符串。",
                     key=f"layout_{file.name}_{i}"
                 )
