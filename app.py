@@ -193,7 +193,7 @@ if uploaded_files:
         mode_options[num_active_conditions] = f"满足【全部 {num_active_conditions} 份】试卷的条件 (最严格)"
         
         selected_threshold = st.selectbox(
-* 20、                        "请选择系统输出学生的标准：",
+            "请选择系统输出学生的标准：",
             options=list(mode_options.keys()),
             format_func=lambda x: mode_options[x],
             index=num_active_conditions - 1
