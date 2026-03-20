@@ -9,7 +9,7 @@ def parse_questions_to_set(q_str):
     numbers = re.findall(r'\d+', str(q_str))
     return set(numbers)
 
-st.title("多试卷错题精准定位系统 (V4 动态配置版)")
+st.title("试卷错题查找系统")
 st.write("上传多份试卷，自定义目标工作表(Sheet)和错题所在列，并灵活选择命中标准。")
 
 # 1. 动态文件上传区
