@@ -83,3 +83,19 @@ if uploaded_files:
                     
                     # 如果目标错题是该生该卷错题的子集，命中次数 + 1
                     if target_qs.issubset(student_wrong_qs):
+                        match_count += 1
+                
+                # 严密判定：只要命中次数 >= 用户设定的阈值，即抓取该学生
+                if match_count >= selected_threshold:
+                    # 【逻辑修改点】：仅追加纯净的学生姓名，不再拼接命中次数
+                    hit_students.append(student)
+            
+            # 4. 结果输出
+            st.divider()
+            if hit_students:
+                st.success(f"匹配成功！共找到 {len(hit_students)} 位符合条件的学生：")
+                st.write("、".join(hit_students))
+            else:
+                st.info("没有找到符合设定标准的大意学生。")
+    else:
+        st.info("👆 请先在上方至少为一份试卷输入错题号。")
