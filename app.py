@@ -66,7 +66,7 @@ with col_main:
 
     if uploaded_files:
         for i, file in enumerate(uploaded_files):
-            with st.expander(f"⚙️ 配置文件: {file.name}", expanded=False): # 默认折叠以节省空间
+            with st.expander(f"⚙️ 试卷: {file.name}", expanded=False): # 默认折叠以节省空间
                 try:
                     xls = pd.ExcelFile(file)
                     selected_sheet = st.selectbox("1. 选择目标工作表", options=xls.sheet_names, key=f"sheet_{file.name}_{i}")
