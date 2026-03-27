@@ -2,22 +2,18 @@ import streamlit as st
 import pandas as pd
 import re
 from collections import defaultdict
-import json
-import io  # 【新增】用于处理内存中的文件流
+import io
 
 # ==========================================
 # 辅助函数定义
 # ==========================================
 
-# 智能识别表头位置：探测 Excel 哪些行构成合并单元格表头
 def detect_header_row(file, sheet_name):
     try:
         df_probe = pd.read_excel(file, sheet_name=sheet_name, nrows=5, header=None)
         first_row = df_probe.iloc[0].dropna()
         probe_cols = df_probe.shape[1]
-        
         if probe_cols == 0: return 0
-        
         fill_ratio = len(first_row) / probe_cols if probe_cols > 0 else 1
         if fill_ratio < 0.3 or len(first_row) == 1:
             return 1
@@ -25,195 +21,189 @@ def detect_header_row(file, sheet_name):
         pass
     return 0 
 
-# 数据清洗函数1：提取纯数字为集合
 def parse_questions_to_set(q_str):
-    if pd.isna(q_str):
-        return set()
-    numbers = re.findall(r'\d+', str(q_str))
-    return set(numbers)
+    if pd.isna(q_str): return set()
+    return set(re.findall(r'\d+', str(q_str)))
 
-# 数据清洗函数2：将长串的名单切割为单个名字的集合
 def parse_names_to_set(name_str):
-    if pd.isna(name_str) or str(name_str).strip() in ['无', '', 'nan']:
-        return set()
+    if pd.isna(name_str) or str(name_str).strip() in ['无', '', 'nan']: return set()
     clean_str = re.sub(r'[、，,\s\x1a]+', ',', str(name_str))
-    names = [n.strip() for n in clean_str.split(',') if n.strip()]
-    return set(names)
+    return set([n.strip() for n in clean_str.split(',') if n.strip()])
+
+# 【严密逻辑新增】：删除暂存记录的回调函数
+def delete_record(index):
+    st.session_state.export_cart.pop(index)
 
 # ==========================================
-# 界面与主要逻辑
+# 状态初始化与基础配置
 # ==========================================
 
-st.set_page_config(page_title="错题匹配系统 V6.1", layout="wide")
-st.title("试卷错题精准定位系统 (V6.1 导出升级版)")
-st.write("已深度优化：智能识别含有合并单元格 giant 标题行的复杂排版，支持自定义数据起始行，并支持一键导出 Excel。")
+st.set_page_config(page_title="错题匹配系统 V7", layout="wide")
 
-# 1. 动态文件上传区
-uploaded_files = st.file_uploader("上传Excel文件（可多选）", type=['xlsx', 'xls'], accept_multiple_files=True)
+# 初始化“数据购物车”，保证刷新页面时数据不丢失
+if 'export_cart' not in st.session_state:
+    st.session_state.export_cart = []
 
-if uploaded_files:
-    st.subheader("第一步：配置各试卷的数据源与条件")
-    
+# 预设的高中化学题型标签库
+CHEM_TAGS = [
+    "阿伏加德罗常数", "有机化学基础", "离子反应与共存", "氧化还原反应", 
+    "物质结构与性质", "化学平衡与速率", "电化学 (原电池/电解池)", 
+    "反应热与焓变", "水溶液中的离子平衡", "化学实验基础", "工艺流程分析", "其他/综合"
+]
+
+st.title("试卷错题精准定位系统 (V7 批处理工作流版)")
+st.write("新增：题型打标、多条记录暂存、一键汇总导出总表功能。")
+
+# 页面布局：左侧为操作区，右侧为暂存与导出区
+col_main, col_sidebar = st.columns([7, 3])
+
+with col_main:
+    st.subheader("一、 数据源与条件配置")
+    uploaded_files = st.file_uploader("上传Excel文件（可多选）", type=['xlsx', 'xls'], accept_multiple_files=True)
+
     query_conditions = {}
     papers_data = {}
-    
-    for i, file in enumerate(uploaded_files):
-        with st.expander(f"⚙️ 配置文件: {file.name}", expanded=True):
-            try:
-                xls = pd.ExcelFile(file)
-                sheet_names = xls.sheet_names
-                selected_sheet = st.selectbox("1. 选择目标工作表 (Sheet)", options=sheet_names, key=f"sheet_{file.name}_{i}")
-                
-                suggested_header_idx = detect_header_row(xls, selected_sheet)
-                
-                header_row_input = st.number_input(
-                    "2. 实际列名在第几行？(跳过 giant 标题行)",
-                    min_value=1,
-                    max_value=20,
-                    value=suggested_header_idx + 1,
-                    help="如果Excel顶部有一行巨大的标题，真正的‘姓名’、‘题号’列名在第2行，这里请填2。",
-                    key=f"header_row_{file.name}_{i}"
-                )
-                
-                actual_header_idx = header_row_input - 1
-                
-                df_preview = pd.read_excel(xls, sheet_name=selected_sheet, nrows=0, header=actual_header_idx)
-                columns = df_preview.columns.tolist()
-                columns = [str(c).strip() for c in columns]
-                
-                layout_type = st.radio(
-                    "3. 请选择该表格的排版类型：",
-                    options=["类型1：以【学生】为行 (常规)", "类型2：以【题号】为行 (复杂排版)"],
-                    help="类型1：姓名列和错题号列是分开的。类型2：题号列是合并的，名单列是长字符串。",
-                    key=f"layout_{file.name}_{i}"
-                )
-                
-                student_dict = defaultdict(set)
-                df_full = pd.read_excel(xls, sheet_name=selected_sheet, header=actual_header_idx)
-                
-                if "类型1" in layout_type:
-                    default_name_idx = 0
-                    default_err_idx = 1 if len(columns) > 1 else 0
-                    for idx, col_name in enumerate(columns):
-                        col_str = str(col_name)
-                        if '名' in col_str: default_name_idx = idx
-                        if '错' in col_str: default_err_idx = idx
 
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        name_col = st.selectbox("指定【姓名】所在的列名", options=columns, index=default_name_idx, key=f"name_{file.name}_{i}")
-                    with col2:
-                        err_col = st.selectbox("指定【错题号】所在的列名", options=columns, index=default_err_idx, key=f"err_{file.name}_{i}")
+    if uploaded_files:
+        for i, file in enumerate(uploaded_files):
+            with st.expander(f"⚙️ 配置文件: {file.name}", expanded=False): # 默认折叠以节省空间
+                try:
+                    xls = pd.ExcelFile(file)
+                    selected_sheet = st.selectbox("1. 选择目标工作表", options=xls.sheet_names, key=f"sheet_{file.name}_{i}")
+                    suggested_header = detect_header_row(xls, selected_sheet)
                     
-                    for _, row in df_full.iterrows():
-                        if pd.notna(row[name_col]):
-                            name = str(row[name_col]).strip()
-                            student_dict[name].update(parse_questions_to_set(row[err_col]))
-
-                else:
-                    default_q_idx = 0
-                    default_names_idx = len(columns) - 1 
-                    for idx, col_name in enumerate(columns):
-                        col_str = str(col_name)
-                        if '题号' in col_str: default_q_idx = idx
-                        if '名单' in col_str or '学生' in col_str: default_names_idx = idx
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        q_col = st.selectbox("指定【题号】所在的列名", options=columns, index=default_q_idx, key=f"q_{file.name}_{i}")
-                    with col2:
-                        names_col = st.selectbox("指定【答错名单】所在的列名", options=columns, index=default_names_idx, key=f"n_{file.name}_{i}")
+                    actual_header_idx = st.number_input("2. 实际列名在第几行？", min_value=1, value=suggested_header + 1, key=f"header_row_{file.name}_{i}") - 1
                     
-                    df_full[q_col] = df_full[q_col].ffill()
+                    df_preview = pd.read_excel(xls, sheet_name=selected_sheet, nrows=0, header=actual_header_idx)
+                    columns = [str(c).strip() for c in df_preview.columns.tolist()]
                     
-                    for _, row in df_full.iterrows():
-                        q_val = str(row[q_col]).strip()
-                        q_nums = re.findall(r'\d+', q_val)
-                        if not q_nums: continue 
-                        q_num = q_nums[0] 
-                        
-                        names_set = parse_names_to_set(row[names_col])
-                        for name in names_set:
-                            student_dict[name].add(q_num)
+                    layout_type = st.radio("3. 表格排版类型：", ["类型1：以【学生】为行", "类型2：以【题号】为行"], key=f"layout_{file.name}_{i}")
+                    
+                    student_dict = defaultdict(set)
+                    df_full = pd.read_excel(xls, sheet_name=selected_sheet, header=actual_header_idx)
+                    
+                    if "类型1" in layout_type:
+                        name_col = st.selectbox("指定【姓名】列", options=columns, index=0 if len(columns)>0 else 0, key=f"name_{file.name}_{i}")
+                        err_col = st.selectbox("指定【错题号】列", options=columns, index=1 if len(columns)>1 else 0, key=f"err_{file.name}_{i}")
+                        for _, row in df_full.iterrows():
+                            if pd.notna(row[name_col]):
+                                student_dict[str(row[name_col]).strip()].update(parse_questions_to_set(row[err_col]))
+                    else:
+                        q_col = st.selectbox("指定【题号】列", options=columns, index=0, key=f"q_{file.name}_{i}")
+                        names_col = st.selectbox("指定【答错名单】列", options=columns, index=len(columns)-1, key=f"n_{file.name}_{i}")
+                        df_full[q_col] = df_full[q_col].ffill()
+                        for _, row in df_full.iterrows():
+                            q_val = str(row[q_col]).strip()
+                            q_nums = re.findall(r'\d+', q_val)
+                            if q_nums:
+                                for name in parse_names_to_set(row[names_col]):
+                                    student_dict[name].add(q_nums[0])
 
-                papers_data[file.name] = dict(student_dict)
-                
-            except Exception as e:
-                st.error(f"解析文件失败。请确保设置正确（特别是起始行）且文件格式规范。错误日志: {e}")
-                st.stop()
-                
-            target_input = st.text_input("🎯 设定要求命中的错题号", 
-                                         placeholder="例如: 2, 3, 6 (如无要求请留空)", 
-                                         key=f"target_{file.name}_{i}")
-            if target_input.strip():
-                query_conditions[file.name] = parse_questions_to_set(target_input)
+                    papers_data[file.name] = dict(student_dict)
+                except Exception as e:
+                    st.error(f"解析 {file.name} 失败: {e}")
+                    st.stop()
+                    
+                target_input = st.text_input("🎯 要求命中的错题号 (留空则不查此卷)", placeholder="例: 2, 3", key=f"target_{file.name}_{i}")
+                if target_input.strip():
+                    query_conditions[file.name] = parse_questions_to_set(target_input)
 
-    # 2. 核心逻辑：动态模式选择 
-    if query_conditions:
-        st.divider()
-        st.subheader("第二步：设定匹配模式 (阈值)")
-        
-        num_active_conditions = len(query_conditions)
-        mode_options = {}
-        for i in range(1, num_active_conditions):
-            mode_options[i] = f"满足其中【任意 {i} 份】试卷的条件即可"
-        mode_options[num_active_conditions] = f"满足【全部 {num_active_conditions} 份】试卷的条件 (最严格)"
-        
-        selected_threshold = st.selectbox(
-            "请选择系统输出学生的标准：",
-            options=list(mode_options.keys()),
-            format_func=lambda x: mode_options[x],
-            index=num_active_conditions - 1
-        )
+        if query_conditions:
+            st.divider()
+            st.subheader("二、 匹配与打标签")
+            
+            num_active = len(query_conditions)
+            mode_options = {i: f"满足任意 {i} 份" for i in range(1, num_active)}
+            mode_options[num_active] = f"满足全部 {num_active} 份"
+            selected_threshold = st.selectbox("系统输出标准：", options=list(mode_options.keys()), format_func=lambda x: mode_options[x], index=num_active - 1)
 
-        if st.button("开始精准匹配", type="primary"):
+            # 匹配逻辑
             all_students = set()
-            for student_dict in papers_data.values():
-                all_students.update(student_dict.keys())
-            
+            for sd in papers_data.values(): all_students.update(sd.keys())
             hit_students = []
-            
             for student in all_students:
-                match_count = 0 
-                for paper_name, target_qs in query_conditions.items():
-                    student_wrong_qs = papers_data[paper_name].get(student, set())
-                    if target_qs.issubset(student_wrong_qs):
-                        match_count += 1
-                
+                match_count = sum(1 for p_name, t_qs in query_conditions.items() if t_qs.issubset(papers_data[p_name].get(student, set())))
                 if match_count >= selected_threshold:
                     hit_students.append(student)
-            
-            st.divider()
-            if hit_students:
-                st.success(f"匹配成功！共找到 {len(hit_students)} 位符合条件的学生：")
-                
-                # 保留原本的一键复制文本框
-                st.text_area("点击下方可直接复制全部姓名", "、".join(hit_students), height=100)
-                
-                # ==========================================
-                # 【严密逻辑新增】：导出为 Excel 的处理模块
-                # ==========================================
-                
-                # 1. 转化为结构化表格
-                df_export = pd.DataFrame({"需要重点关注的学生名单": hit_students})
-                
-                # 2. 在内存中创建二进制流文件
-                buffer = io.BytesIO()
-                
-                # 3. 使用 openpyxl 引擎将 DataFrame 写入内存缓存 (不落盘，极其安全)
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_export.to_excel(writer, index=False, sheet_name="筛查结果")
-                
-                # 4. 前端提供下载入口
-                st.download_button(
-                    label="📥 一键导出名单为 Excel 文件",
-                    data=buffer.getvalue(),
-                    file_name="学生错题匹配名单.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary" # 使用主按钮颜色突出显示
-                )
 
+            if hit_students:
+                st.success(f"匹配成功！共找到 {len(hit_students)} 位符合条件的学生。")
+                st.text_area("名单预览：", "、".join(hit_students), height=70)
+                
+                # ==========================================
+                # 【严密逻辑新增】：标签与暂存入库区
+                # ==========================================
+                st.info("👇 请为这批名单打上标签，并保存至右侧的【待导出记录】中。")
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    # 支持下拉选择，也允许用户自己输入预设库里没有的标签
+                    selected_tag = st.selectbox("为此题型打标签：", options=CHEM_TAGS)
+                    custom_tag = st.text_input("或手动输入新标签（优先使用此项）：", placeholder="例如：有机推断题")
+                
+                final_tag = custom_tag.strip() if custom_tag.strip() else selected_tag
+                
+                # 将查询条件格式化为易读的字符串，供 Excel 使用
+                formatted_query = "；".join([f"[{p}]错题:{','.join(sorted(list(qs), key=lambda x: int(x) if x.isdigit() else x))}" for p, qs in query_conditions.items()])
+
+                if st.button("➕ 保存此条记录至待导出列表", type="primary"):
+                    st.session_state.export_cart.append({
+                        "标签": final_tag,
+                        "题号": formatted_query,
+                        "学生名字": "、".join(hit_students),
+                        "总人数": len(hit_students)
+                    })
+                    st.success("✅ 记录已保存！请看右侧面板。您可以继续修改条件查询下一题。")
             else:
-                st.info("没有找到符合设定标准的大意学生。")
+                st.warning("没有找到符合条件的学生。")
+        else:
+            st.info("👆 请先输入至少一份试卷的错题条件。")
+
+# ==========================================
+# 右侧边栏：暂存购物车与导出管理器
+# ==========================================
+with col_sidebar:
+    st.subheader("🛒 待导出记录")
+    
+    if not st.session_state.export_cart:
+        st.info("暂无记录。请在左侧查询并点击保存。")
     else:
-        st.info("👆 请先在上方至少为一份试卷输入错题条件。")
+        st.write(f"当前已缓存 **{len(st.session_state.export_cart)}** 条记录")
+        
+        # 逐条展示记录，并提供删除按钮
+        for idx, record in enumerate(st.session_state.export_cart):
+            with st.container(border=True):
+                st.markdown(f"**🏷️ {record['标签']}** (共{record['总人数']}人)")
+                st.caption(f"条件: {record['题号']}")
+                # 利用 on_click 回调函数实现精准删除，避免页面重载引发的索引错乱
+                st.button("🗑️ 删除", key=f"del_btn_{idx}", on_click=delete_record, args=(idx,))
+        
+        st.divider()
+        
+        # 汇总导出逻辑
+        df_export = pd.DataFrame(st.session_state.export_cart)
+        # 确保列的顺序严格遵循用户要求
+        df_export = df_export[['标签', '题号', '学生名字', '总人数']]
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_export.to_excel(writer, index=False, sheet_name="分类错题汇总")
+            
+            # 自动调整列宽以确保 Excel 美观
+            worksheet = writer.sheets['分类错题汇总']
+            worksheet.column_dimensions['A'].width = 20 # 标签
+            worksheet.column_dimensions['B'].width = 35 # 题号
+            worksheet.column_dimensions['C'].width = 60 # 学生名字
+            worksheet.column_dimensions['D'].width = 10 # 总人数
+
+        st.download_button(
+            label="📥 一键导出全部记录至 Excel",
+            data=buffer.getvalue(),
+            file_name="高中化学_分类错题汇总表.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True
+        )
+        
+        if st.button("清空所有记录", use_container_width=True):
+            st.session_state.export_cart = []
+            st.rerun()
